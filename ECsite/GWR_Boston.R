@@ -10,7 +10,7 @@ library(mlbench)
 data(BostonHousing2)
 
 # データの用意
-Y <- BostonHousing2$cmedv　   # 被説明変数
+Y <- BostonHousing2$cmedv   # 被説明変数
 X <- subset(BostonHousing2, T, c(crim, zn, indus, chas, nox, rm, age, dis, rad, tax, ptratio, b, lstat))
 X$chas <- as.numeric(X$chas) - 1
 X <- as.matrix(X)   # 説明変数
