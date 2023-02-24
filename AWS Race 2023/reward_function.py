@@ -27,7 +27,7 @@ def reward_function(params):
         elif distance_from_center <= marker_2:
             reward *= 0.5
         elif distance_from_center <= marker_3:
-            reward *= 0.1
+            reward *= 1e-3
         else:
             reward *= 1e-3 # likely crashed/ close to off track
 
@@ -64,5 +64,13 @@ def reward_function(params):
     DIRECTION_THRESHOLD = 10.0
     if direction_diff > DIRECTION_THRESHOLD:
         reward *= 0.01
+
+    ## 長く走ったら良い報酬になる
+    # 
+    TOTAL_NUM_STEPS = 300
+
+    # Give additional reward if the car pass every 100 steps faster than expected
+    if (steps % 100) == 0 and progress > (steps / TOTAL_NUM_STEPS) * 100 :
+        reward += 10.0
 
     return float(reward)
