@@ -1,0 +1,2 @@
+lightgbm==3.3.5
+jpholiday==0.1.8
