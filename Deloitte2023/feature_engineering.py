@@ -116,6 +116,29 @@ def add_geographical_features(df, venue_info_df):
     df['away_same_prefecture'] = df['away_prefecture'] == df['venue_prefecture']
     df['away_same_region'] = df['away_region'] == df['venue_region']
 
+    df['distance_category'] = df.apply(lambda row: get_distance_category(row['home_region'], row['away_region']), axis=1)
+
     df = df.drop(['home_prefecture', 'home_region', 'away_region'], axis=1)
 
     return df
+
+
+
+def get_distance_category(home_region, away_region):
+    # 隣接地方を定義
+    adjacent_regions = {
+        '北海道': ['東北'],
+        '東北': ['北海道', '関東'],
+        '関東': ['東北', '中部'],
+        '中部': ['関東', '近畿'],
+        '近畿': ['中部', '中国', '四国'],
+        '中国': ['近畿', '四国', '九州'],
+        '四国': ['近畿', '中国', '九州'],
+        '九州': ['中国', '四国']
+    }
+    if home_region == away_region:
+        return 1
+    elif away_region in adjacent_regions[home_region]:
+        return 2
+    else:
+        return 3
