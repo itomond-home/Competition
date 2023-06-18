@@ -28,11 +28,38 @@ def process_periodic_features(df):
     return df
 
 def process_weather(weather):
-    main_weathers = ['晴', '曇', '雨']  # 主要な天候
-    return weather.apply(lambda x: x if x in main_weathers else 'その他')
+    # Define the basic ratings for the weathers
+    basic_ratings = {
+        '晴': 2,
+        '曇': -1,
+        '雨': -2,
+        '雪': -3,
+        '霧': -3,
+        '雷': -3,
+        '屋内': 3
+    }
+
+    def rate_weather(weather_string):
+        rating = 0
+        for w, r in basic_ratings.items():
+            if w in weather_string:
+                rating += r
+        # Convert the rating to 1-5 scale
+        if rating <= -4: return 1
+        if rating <= -1: return 2
+        if rating == 0: return 3
+        if rating <= 2: return 4
+        return 5
+
+    return weather.apply(rate_weather)
 
 def clean_data(df):
     df['round'] = df['round'].str.replace('第', '').str.replace('日', '').astype(int)
+    return df
+
+def calculate_discomfort_index(df):
+    # Calculate discomfort index
+    df['discomfort_index'] = 0.81 * df['temperature'] + 0.01 * df['humidity'] * (0.99 * df['temperature'] - 14.3) + 46.3
     return df
 
 def apply_feature_engineering(df):
@@ -66,6 +93,10 @@ def apply_feature_engineering(df):
     df.drop(['holiday_date'], axis=1, inplace=True)
 
     df['weather'] = process_weather(df['weather'])
+
+    # Apply the new functions
+    df = calculate_discomfort_index(df)
+    df = generate_team_performance(df)
 
     df = clean_data(df)
 
@@ -122,8 +153,6 @@ def add_geographical_features(df, venue_info_df):
 
     return df
 
-
-
 def get_distance_category(home_region, away_region):
     # 隣接地方を定義
     adjacent_regions = {
@@ -136,9 +165,118 @@ def get_distance_category(home_region, away_region):
         '四国': ['近畿', '中国', '九州'],
         '九州': ['中国', '四国']
     }
+
+    # 遠距離地方を定義
+    distant_regions = {
+        '北海道': ['関東', '中部', '近畿', '中国', '四国', '九州'],
+        '東北': ['中部', '近畿', '中国', '四国', '九州'],
+        '関東': ['中国', '四国', '九州'],
+        '中部': ['四国', '九州'],
+        '近畿': ['九州'],
+        '中国': [],
+        '四国': [],
+        '九州': []
+    }
+
     if home_region == away_region:
         return 1
     elif away_region in adjacent_regions[home_region]:
         return 2
-    else:
+    elif away_region in distant_regions[home_region]:
         return 3
+    else:
+        return 4
+
+
+def generate_team_performance(df):
+    # Define point rules
+    points = {"win": 3, "draw": 1, "lose": 0}
+
+    # Prepare dictionaries to keep track of each team's points, ranks, scores, wins, and losses
+    team_points = {}
+    team_ranks = {}
+    team_scores_for = {}
+    team_scores_against = {}
+    team_wins = {}
+    team_losses = {}
+    last_team_ranks = {}
+    last_year_final_ranks = {}
+    last_year = df['match_date'].dt.year.min() - 1  # initialize with a year before the minimum
+
+    for idx, row in df.iterrows():
+        # Get team ids
+        home_team_id = row['home_team']
+        away_team_id = row['away_team']
+
+        # Check if a new year has started
+        current_year = row['match_date'].year
+        if current_year != last_year:
+            # Store last year's final ranks
+            if last_team_ranks:
+                last_year_final_ranks = last_team_ranks.copy()
+            # Reset team points, ranks, scores, wins, and losses for the new year
+            team_points = {}
+            team_ranks = {}
+            team_scores_for = {}
+            team_scores_against = {}
+            team_wins = {}
+            team_losses = {}
+            last_year = current_year
+
+        # Calculate result
+        if row['home_team_score'] > row['away_team_score']:
+            home_team_points = points["win"]
+            away_team_points = points["lose"]
+            team_wins[home_team_id] = team_wins.get(home_team_id, 0) + 1
+            team_losses[away_team_id] = team_losses.get(away_team_id, 0) + 1
+        elif row['home_team_score'] < row['away_team_score']:
+            home_team_points = points["lose"]
+            away_team_points = points["win"]
+            team_wins[away_team_id] = team_wins.get(away_team_id, 0) + 1
+            team_losses[home_team_id] = team_losses.get(home_team_id, 0) + 1
+        else:
+            home_team_points = points["draw"]
+            away_team_points = points["draw"]
+
+        # Update team points
+        team_points[home_team_id] = team_points.get(home_team_id, 0) + home_team_points
+        team_points[away_team_id] = team_points.get(away_team_id, 0) + away_team_points
+
+        # Calculate team ranks
+        team_ranks = {team: rank for rank, (team, _) in enumerate(sorted(team_points.items(), key=lambda item: item[1], reverse=True), 1)}
+
+        # Set flags if a team became first
+        df.loc[idx, 'home_team_became_first'] = True if home_team_id in last_team_ranks and last_team_ranks[home_team_id] != 1 and team_ranks[home_team_id] == 1 else False
+        # df.loc[idx, 'away_team_became_first'] = True if away_team_id in last_team_ranks and last_team_ranks[away_team_id] != 1 and team_ranks[away_team_id] == 1 else False
+
+        # Update team ranks
+        last_team_ranks = team_ranks.copy()
+
+        # Add team ranks and last year's final ranks to the data
+        df.loc[idx, 'home_team_rank'] = team_ranks[home_team_id]
+        df.loc[idx, 'away_team_rank'] = team_ranks[away_team_id]
+        df.loc[idx, 'home_team_last_year_rank'] = last_year_final_ranks.get(home_team_id, -1)
+        df.loc[idx, 'away_team_last_year_rank'] = last_year_final_ranks.get(away_team_id, -1)
+
+        # Update team scores
+        team_scores_for[home_team_id] = team_scores_for.get(home_team_id, 0) + row['home_team_score']
+        team_scores_for[away_team_id] = team_scores_for.get(away_team_id, 0) + row['away_team_score']
+
+        team_scores_against[home_team_id] = team_scores_against.get(home_team_id, 0) + row['away_team_score']
+        team_scores_against[away_team_id] = team_scores_against.get(away_team_id, 0) + row['home_team_score']
+
+        # Add team scores to the data
+        df.loc[idx, 'home_team_scored'] = team_scores_for[home_team_id]
+        df.loc[idx, 'away_team_scored'] = team_scores_for[away_team_id]
+
+        df.loc[idx, 'home_team_conceded'] = team_scores_against[home_team_id]
+        # df.loc[idx, 'away_team_conceded'] = team_scores_against[away_team_id]
+
+        # Add team winning streaks and losing streaks to the data
+        df.loc[idx, 'home_team_winning_streak'] = team_wins.get(home_team_id, 0)
+        df.loc[idx, 'away_team_winning_streak'] = team_wins.get(away_team_id, 0)
+
+        df.loc[idx, 'home_team_losing_streak'] = team_losses.get(home_team_id, 0)
+        df.loc[idx, 'away_team_losing_streak'] = team_losses.get(away_team_id, 0)
+
+    return df
