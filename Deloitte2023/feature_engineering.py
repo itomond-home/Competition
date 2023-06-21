@@ -202,6 +202,12 @@ def generate_team_performance(df):
     last_team_ranks = {}
     last_year_final_ranks = {}
     last_year = df['match_date'].dt.year.min() - 1  # initialize with a year before the minimum
+    last_3_matches_points = {}
+    last_5_matches_points = {}
+    last_3_matches_scores_for = {}
+    last_5_matches_scores_for = {}
+    last_3_matches_scores_against = {}
+    last_5_matches_scores_against = {}
 
     for idx, row in df.iterrows():
         # Get team ids
@@ -228,12 +234,12 @@ def generate_team_performance(df):
             home_team_points = points["win"]
             away_team_points = points["lose"]
             team_wins[home_team_id] = team_wins.get(home_team_id, 0) + 1
-            team_losses[away_team_id] = team_losses.get(away_team_id, 0) + 1
+            team_losses[away_team_id] = team_losses.get(away_team_id, 0) - 1  # losses are represented as negative
         elif row['home_team_score'] < row['away_team_score']:
             home_team_points = points["lose"]
             away_team_points = points["win"]
             team_wins[away_team_id] = team_wins.get(away_team_id, 0) + 1
-            team_losses[home_team_id] = team_losses.get(home_team_id, 0) + 1
+            team_losses[home_team_id] = team_losses.get(home_team_id, 0) - 1  # losses are represented as negative
         else:
             home_team_points = points["draw"]
             away_team_points = points["draw"]
@@ -242,12 +248,37 @@ def generate_team_performance(df):
         team_points[home_team_id] = team_points.get(home_team_id, 0) + home_team_points
         team_points[away_team_id] = team_points.get(away_team_id, 0) + away_team_points
 
+        # Update last 3 and 5 matches points
+        if home_team_id in last_3_matches_points:
+            last_3_matches_points[home_team_id].append(home_team_points)
+            if len(last_3_matches_points[home_team_id]) > 3:
+                last_3_matches_points[home_team_id].pop(0)
+        else:
+            last_3_matches_points[home_team_id] = [home_team_points]
+
+        if home_team_id in last_5_matches_points:
+            last_5_matches_points[home_team_id].append(home_team_points)
+            if len(last_5_matches_points[home_team_id]) > 5:
+                last_5_matches_points[home_team_id].pop(0)
+        else:
+            last_5_matches_points[home_team_id] = [home_team_points]
+
+        if away_team_id in last_3_matches_points:
+            last_3_matches_points[away_team_id].append(away_team_points)
+            if len(last_3_matches_points[away_team_id]) > 3:
+                last_3_matches_points[away_team_id].pop(0)
+        else:
+            last_3_matches_points[away_team_id] = [away_team_points]
+
+        if away_team_id in last_5_matches_points:
+            last_5_matches_points[away_team_id].append(away_team_points)
+            if len(last_5_matches_points[away_team_id]) > 5:
+                last_5_matches_points[away_team_id].pop(0)
+        else:
+            last_5_matches_points[away_team_id] = [away_team_points]
+
         # Calculate team ranks
         team_ranks = {team: rank for rank, (team, _) in enumerate(sorted(team_points.items(), key=lambda item: item[1], reverse=True), 1)}
-
-        # Set flags if a team became first
-        df.loc[idx, 'home_team_became_first'] = True if home_team_id in last_team_ranks and last_team_ranks[home_team_id] != 1 and team_ranks[home_team_id] == 1 else False
-        # df.loc[idx, 'away_team_became_first'] = True if away_team_id in last_team_ranks and last_team_ranks[away_team_id] != 1 and team_ranks[away_team_id] == 1 else False
 
         # Update team ranks
         last_team_ranks = team_ranks.copy()
@@ -258,6 +289,12 @@ def generate_team_performance(df):
         df.loc[idx, 'home_team_last_year_rank'] = last_year_final_ranks.get(home_team_id, -1)
         df.loc[idx, 'away_team_last_year_rank'] = last_year_final_ranks.get(away_team_id, -1)
 
+        # Add rank differences and their absolute values to the data
+        df.loc[idx, 'rank_diff'] = team_ranks[home_team_id] - team_ranks[away_team_id]
+        df.loc[idx, 'rank_diff_abs'] = abs(df.loc[idx, 'rank_diff'])
+        df.loc[idx, 'last_year_rank_diff'] = last_year_final_ranks.get(home_team_id, 0) - last_year_final_ranks.get(away_team_id, 0)
+        df.loc[idx, 'last_year_rank_diff_abs'] = abs(df.loc[idx, 'last_year_rank_diff'])
+
         # Update team scores
         team_scores_for[home_team_id] = team_scores_for.get(home_team_id, 0) + row['home_team_score']
         team_scores_for[away_team_id] = team_scores_for.get(away_team_id, 0) + row['away_team_score']
@@ -265,17 +302,74 @@ def generate_team_performance(df):
         team_scores_against[home_team_id] = team_scores_against.get(home_team_id, 0) + row['away_team_score']
         team_scores_against[away_team_id] = team_scores_against.get(away_team_id, 0) + row['home_team_score']
 
+        # Update last 3 and 5 matches scores
+        if home_team_id in last_3_matches_scores_for:
+            last_3_matches_scores_for[home_team_id].append(row['home_team_score'])
+            if len(last_3_matches_scores_for[home_team_id]) > 3:
+                last_3_matches_scores_for[home_team_id].pop(0)
+        else:
+            last_3_matches_scores_for[home_team_id] = [row['home_team_score']]
+
+        if home_team_id in last_5_matches_scores_for:
+            last_5_matches_scores_for[home_team_id].append(row['home_team_score'])
+            if len(last_5_matches_scores_for[home_team_id]) > 5:
+                last_5_matches_scores_for[home_team_id].pop(0)
+        else:
+            last_5_matches_scores_for[home_team_id] = [row['home_team_score']]
+
+        if away_team_id in last_3_matches_scores_for:
+            last_3_matches_scores_for[away_team_id].append(row['away_team_score'])
+            if len(last_3_matches_scores_for[away_team_id]) > 3:
+                last_3_matches_scores_for[away_team_id].pop(0)
+        else:
+            last_3_matches_scores_for[away_team_id] = [row['away_team_score']]
+
+        if away_team_id in last_5_matches_scores_for:
+            last_5_matches_scores_for[away_team_id].append(row['away_team_score'])
+            if len(last_5_matches_scores_for[away_team_id]) > 5:
+                last_5_matches_scores_for[away_team_id].pop(0)
+        else:
+            last_5_matches_scores_for[away_team_id] = [row['away_team_score']]
+
+        # Update last 3 matches scores against
+        if home_team_id in last_3_matches_scores_against:
+            last_3_matches_scores_against[home_team_id].append(row['away_team_score'])
+            if len(last_3_matches_scores_against[home_team_id]) > 3:
+                last_3_matches_scores_against[home_team_id].pop(0)
+        else:
+            last_3_matches_scores_against[home_team_id] = [row['away_team_score']]
+
+        if away_team_id in last_3_matches_scores_against:
+            last_3_matches_scores_against[away_team_id].append(row['home_team_score'])
+            if len(last_3_matches_scores_against[away_team_id]) > 3:
+                last_3_matches_scores_against[away_team_id].pop(0)
+        else:
+            last_3_matches_scores_against[away_team_id] = [row['home_team_score']]
+
+        # Add averages of last 3 matches against scores to the data
+        df.loc[idx, 'home_team_avg_conceded_last_3'] = sum(last_3_matches_scores_against[home_team_id]) / len(last_3_matches_scores_against[home_team_id]) if len(last_3_matches_scores_against[home_team_id]) > 0 else 0
+        df.loc[idx, 'away_team_avg_conceded_last_3'] = sum(last_3_matches_scores_against[away_team_id]) / len(last_3_matches_scores_against[away_team_id]) if len(last_3_matches_scores_against[away_team_id]) > 0 else 0
+
         # Add team scores to the data
         df.loc[idx, 'home_team_scored'] = team_scores_for[home_team_id]
         df.loc[idx, 'away_team_scored'] = team_scores_for[away_team_id]
-
         df.loc[idx, 'home_team_conceded'] = team_scores_against[home_team_id]
-        # df.loc[idx, 'away_team_conceded'] = team_scores_against[away_team_id]
+        df.loc[idx, 'away_team_conceded'] = team_scores_against[away_team_id]
 
-        # Add team winning streaks and losing streaks to the data
+        # Add averages of last 3 and 5 matches points and scores to the data
+        df.loc[idx, 'home_team_avg_points_last_3'] = sum(last_3_matches_points[home_team_id]) / len(last_3_matches_points[home_team_id]) if len(last_3_matches_points[home_team_id]) > 0 else 0
+        df.loc[idx, 'home_team_avg_points_last_5'] = sum(last_5_matches_points[home_team_id]) / len(last_5_matches_points[home_team_id]) if len(last_5_matches_points[home_team_id]) > 0 else 0
+        df.loc[idx, 'away_team_avg_points_last_3'] = sum(last_3_matches_points[away_team_id]) / len(last_3_matches_points[away_team_id]) if len(last_3_matches_points[away_team_id]) > 0 else 0
+        df.loc[idx, 'away_team_avg_points_last_5'] = sum(last_5_matches_points[away_team_id]) / len(last_5_matches_points[away_team_id]) if len(last_5_matches_points[away_team_id]) > 0 else 0
+
+        df.loc[idx, 'home_team_avg_scored_last_3'] = sum(last_3_matches_scores_for[home_team_id]) / len(last_3_matches_scores_for[home_team_id]) if len(last_3_matches_scores_for[home_team_id]) > 0 else 0
+        df.loc[idx, 'home_team_avg_scored_last_5'] = sum(last_5_matches_scores_for[home_team_id]) / len(last_5_matches_scores_for[home_team_id]) if len(last_5_matches_scores_for[home_team_id]) > 0 else 0
+        df.loc[idx, 'away_team_avg_scored_last_3'] = sum(last_3_matches_scores_for[away_team_id]) / len(last_3_matches_scores_for[away_team_id]) if len(last_3_matches_scores_for[away_team_id]) > 0 else 0
+        df.loc[idx, 'away_team_avg_scored_last_5'] = sum(last_5_matches_scores_for[away_team_id]) / len(last_5_matches_scores_for[away_team_id]) if len(last_5_matches_scores_for[away_team_id]) > 0 else 0
+
+        # Add winning and losing streaks to the data
         df.loc[idx, 'home_team_winning_streak'] = team_wins.get(home_team_id, 0)
         df.loc[idx, 'away_team_winning_streak'] = team_wins.get(away_team_id, 0)
-
         df.loc[idx, 'home_team_losing_streak'] = team_losses.get(home_team_id, 0)
         df.loc[idx, 'away_team_losing_streak'] = team_losses.get(away_team_id, 0)
 
