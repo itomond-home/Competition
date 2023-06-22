@@ -1,6 +1,10 @@
+import re
 import pandas as pd
 import numpy as np
-import re
+import lightgbm as lgb
+from sklearn.model_selection import KFold
+from sklearn.decomposition import PCA
+from sklearn.inspection import permutation_importance
 
 def process_periodic_features(df):
     df['match_date'] = pd.to_datetime(df['match_date'])
@@ -99,6 +103,40 @@ def apply_feature_engineering(df):
     df = generate_team_performance(df)
 
     df = clean_data(df)
+
+    # Define function to get the two most frequent players
+    def most_freq_players(df, team):
+        player_cols = [f'{team}_player{i}' for i in range(1, 12)]
+        players = df[player_cols].values.flatten()
+        return pd.Series(players).value_counts().nlargest(2).index.tolist()
+
+    # Get the two most frequent players for each team
+    most_freq_home_players = df.groupby('home_team').apply(most_freq_players, 'home_team')
+    most_freq_away_players = df.groupby('away_team').apply(most_freq_players, 'away_team')
+
+    # Convert these to dictionaries for faster lookup
+    most_freq_home_players_dict = most_freq_home_players.to_dict()
+    most_freq_away_players_dict = most_freq_away_players.to_dict()
+
+    # Define function to flag if top 2 most frequent players are in the match
+    def flag_most_freq_players(row, team, most_freq_players):
+        flags = [0, 0]
+        for i in range(1, 12):
+            if row[f'{team}_player{i}'] == most_freq_players[row[team]][0]:
+                flags[0] = 1
+            elif row[f'{team}_player{i}'] == most_freq_players[row[team]][1]:
+                flags[1] = 1
+            if all(flags):  # if both flags are 1, no need to continue the loop
+                break
+        return flags
+
+    # Create new columns to flag if the top 2 most frequent players are in the match
+    df[['most_freq_home_player_in_match', 'second_most_freq_home_player_in_match']] = df.apply(lambda row: flag_most_freq_players(row, 'home_team', most_freq_home_players_dict), axis=1, result_type='expand')
+    df[['most_freq_away_player_in_match', 'second_most_freq_away_player_in_match']] = df.apply(lambda row: flag_most_freq_players(row, 'away_team', most_freq_away_players_dict), axis=1, result_type='expand')
+
+    for i in range(1, 12):
+        df = df.drop([f'home_team_player{i}'],axis=1)
+        df = df.drop([f'away_team_player{i}'],axis=1)
 
     return df
 
@@ -207,7 +245,6 @@ def generate_team_performance(df):
     last_3_matches_scores_for = {}
     last_5_matches_scores_for = {}
     last_3_matches_scores_against = {}
-    last_5_matches_scores_against = {}
 
     for idx, row in df.iterrows():
         # Get team ids
@@ -372,5 +409,17 @@ def generate_team_performance(df):
         df.loc[idx, 'away_team_winning_streak'] = team_wins.get(away_team_id, 0)
         df.loc[idx, 'home_team_losing_streak'] = team_losses.get(home_team_id, 0)
         df.loc[idx, 'away_team_losing_streak'] = team_losses.get(away_team_id, 0)
+
+    return df
+
+def add_grouped_statistics(df):
+    columns_to_group = ['temperature', 'discomfort_index', 'humidity', 'home_team_score', 'away_team_score', 'capacity', 'home_team_rank', 'away_team_rank']
+
+    statistics = ['max', 'min', 'var', 'mean', 'sum']
+
+    for col in columns_to_group:
+        for stat in statistics:
+            df_grouped = df.groupby('venue')[col].agg(stat).reset_index().rename(columns={col: f'{col}_{stat}_by_venue'})
+            df = pd.merge(df, df_grouped, on='venue', how='left')
 
     return df
