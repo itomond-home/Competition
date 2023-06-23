@@ -1,10 +1,12 @@
 # model_tuner.py
 import numpy as np
+import pickle
 import optuna
-import optuna.integration.lightgbm as lgb
-from sklearn.feature_selection import RFECV
+import optuna.integration.lightgbm as lgbm
+import lightgbm as lgb
 from sklearn.model_selection import KFold
 from sklearn.metrics import mean_squared_error
+from sklearn.feature_selection import RFECV
 from catboost import CatBoostRegressor
 
 def objective(trial, x_train, y_train):
@@ -60,53 +62,60 @@ def tune_model(x_train, y_train, n_trials=100):
     return params
 
 def select_features_and_tune_parameters(train_df, target_col, seed):
-    # Separate features and target
-    X = train_df.drop(columns=[target_col])
-    y = train_df[target_col]
-
-    # Identify categorical features
-    categorical_cols = X.select_dtypes(include=['object']).columns.tolist()
-
-    # Convert categorical features to category dtype
-    for col in categorical_cols:
-        X[col] = X[col].astype('category')
-
-    # Define initial parameters
     params = {
         'objective': 'regression',
         'metric': 'rmse',
+        'boosting_type': 'dart',
+        'n_jobs': -1,
+        'seed': seed,
+        'verbosity': -1,
+        'force_row_wise': True,
     }
 
+    # Preprocessor
+    # Load the encoders from a pickle file
+    with open('encoders.pkl', 'rb') as f:
+        encoders = pickle.load(f)
+
+    # Apply the encoding map to the relevant columns
+    categorical_cols = train_df.select_dtypes(include=['object', 'category']).columns.tolist()
+    for fold in range(5):
+        for col in categorical_cols:
+            train_df.loc[train_df['fold'] == fold, f'{col}'] = train_df.loc[train_df['fold'] == fold, col].map(encoders[f'fold_{fold}_{col}'])
+
+    # Separate features and target
+    X = train_df.drop(columns=[target_col, 'id'])
+    y = train_df[target_col]
+
+    # Print categorical columns in X
+    categorical_cols_X = X.select_dtypes(include=['object', 'category']).columns.tolist()
+    print(f"Categorical columns in X: {categorical_cols_X}")
+
+    # Instantiate the model with the parameters
+    gbm = lgb.LGBMRegressor(**params)
+
+    # Perform Recursive Feature Elimination using RFECV
+    rfecv = RFECV(estimator=gbm, step=1, cv=KFold(n_splits=10, shuffle=True, random_state=seed), scoring='neg_root_mean_squared_error', min_features_to_select=10, verbose=2)
+    rfecv.fit(X, y)
+
+    selected_features = features = train_df.columns.drop(['id', 'attendance'])[rfecv.support_]
+    print(selected_features)
+
+    # Retain selected features and target in the dataframe
+    train_df_selected = train_df[selected_features + [target_col]]
+
     # Create LightGBM datasets
-    train_data = lgb.Dataset(X, label=y, categorical_feature=categorical_cols)
+    train_data = lgb.Dataset(train_df_selected.drop(columns=[target_col]), label=train_df_selected[target_col])
 
     # Tune parameters
-    tuner = lgb.LightGBMTunerCV(params, train_data, verbose_eval=False, early_stopping_rounds=500, num_boost_round=20000, folds=KFold(n_splits=5, shuffle=True, random_state=seed))
+    tuner = lgbm.LightGBMTunerCV(params, train_data, verbose_eval=False, early_stopping_rounds=500,
+                                num_boost_round=20000, folds=KFold(n_splits=10, shuffle=True, random_state=seed))
     tuner.run()
     best_params = tuner.best_params
 
-    # Final parameters
-    final_params = {
-        'objective':'regression',
-        'metric': 'rmse',
-        'boosting': 'dart',
-        'n_jobs': -1,
-        'seed': seed,
-    }
-
     # Merge tuned parameters and final parameters
-    final_params.update(best_params)
+    params.update(best_params)
 
-    # Perform Recursive Feature Elimination
-    dtrain = lgb.Dataset(X, label=y)
-    gbm = lgb.train(final_params, dtrain)
-    selector = RFECV(gbm, step=1, cv=5)
-    selector = selector.fit(X, y)
+    return train_df_selected, params
 
-    # Get selected features
-    selected_features = X.columns[selector.support_]
 
-    # Retain selected features and target in the dataframe
-    train_df_selected = train_df[selected_features.to_list() + [target_col]]
-
-    return train_df_selected, final_params

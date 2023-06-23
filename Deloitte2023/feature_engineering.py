@@ -1,10 +1,11 @@
 import re
 import pandas as pd
 import numpy as np
-import lightgbm as lgb
+import hdbscan
+from sklearn.neighbors import NearestNeighbors
 from sklearn.model_selection import KFold
-from sklearn.decomposition import PCA
-from sklearn.inspection import permutation_importance
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.preprocessing import StandardScaler
 
 def process_periodic_features(df):
     df['match_date'] = pd.to_datetime(df['match_date'])
@@ -332,6 +333,8 @@ def generate_team_performance(df):
         df.loc[idx, 'last_year_rank_diff'] = last_year_final_ranks.get(home_team_id, 0) - last_year_final_ranks.get(away_team_id, 0)
         df.loc[idx, 'last_year_rank_diff_abs'] = abs(df.loc[idx, 'last_year_rank_diff'])
 
+        df['diff_score'] = np.abs(df['away_team_score'] - df['home_team_score'])
+
         # Update team scores
         team_scores_for[home_team_id] = team_scores_for.get(home_team_id, 0) + row['home_team_score']
         team_scores_for[away_team_id] = team_scores_for.get(away_team_id, 0) + row['away_team_score']
@@ -423,3 +426,62 @@ def add_grouped_statistics(df):
             df = pd.merge(df, df_grouped, on='venue', how='left')
 
     return df
+
+def HDBSCAN_featuring(df):
+    selected_features = ['temperature', 'discomfort_index', 'humidity', 'home_team_score', 'away_team_score', 'capacity', 'home_team_rank', 'away_team_rank']
+    non_binary_features = selected_features.copy()
+
+    # HDBSCAN-based features
+    df_copy = df[non_binary_features].copy()
+    df_copy.reset_index(drop=True, inplace=True)
+
+    clusterer = hdbscan.HDBSCAN(min_cluster_size=5)
+    df['cluster'] = clusterer.fit_predict(df_copy)
+
+    return df
+
+def compute_knn_features_and_preprocess(train_df, test_df, target_col, k=3, folds=5):
+    # Reset the index of train_df and test_df
+    train_df = train_df.reset_index(drop=True)
+    test_df = test_df.reset_index(drop=True)
+
+    # Combine into a single dataframe
+    all_df = pd.concat([train_df, test_df], axis=0).reset_index(drop=True)
+
+    # Separate features and target
+    train_index = all_df[all_df[target_col] != -1].index
+    test_index = all_df[all_df[target_col] == -1].index
+
+    # One-hot encode categorical variables
+    enc = OneHotEncoder(handle_unknown='ignore')
+    all_X = pd.DataFrame(enc.fit_transform(all_df.drop(columns=[target_col])).toarray())
+
+    # Scale features
+    scaler = StandardScaler()
+    all_X = pd.DataFrame(scaler.fit_transform(all_X), index=all_X.index)
+
+    train_X = all_X.loc[train_index]
+    test_X = all_X.loc[test_index]
+
+    # Initialize KFold
+    kf = KFold(n_splits=folds, shuffle=True, random_state=42)
+
+    # Compute KNN features for training data
+    for train_index, _ in kf.split(train_X):
+        X_fold = train_X.iloc[train_index]
+        for i in range(1, k + 1):
+            knn = NearestNeighbors(n_neighbors=i)
+            knn.fit(X_fold)
+            dist, _ = knn.kneighbors(train_X)
+            all_df.loc[train_X.index, f'knn_avg_dist_{i}'] = dist.mean(axis=1)
+
+    # Compute KNN features for test data
+    for i in range(1, k + 1):
+        knn = NearestNeighbors(n_neighbors=i)
+        knn.fit(train_X)
+        dist, _ = knn.kneighbors(test_X)
+        all_df.loc[test_X.index, f'knn_avg_dist_{i}'] = dist.mean(axis=1)
+
+    return all_df
+
+
