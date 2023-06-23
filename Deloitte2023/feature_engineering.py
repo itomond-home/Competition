@@ -485,3 +485,24 @@ def compute_knn_features_and_preprocess(train_df, test_df, target_col, k=3, fold
     return all_df
 
 
+def perform_target_encoding(columns, all_df, target, n_folds=5, seed=42):
+    # Create a copy to not modify original data
+    all_df_encoded = all_df.copy()
+
+    # Create a new target encoded feature for each feature in columns
+    for column in columns:
+        # Create a new column initialized with 0
+        all_df_encoded[f'{column}_target_enc'] = 0
+
+        # Perform out-of-fold target encoding
+        kf = KFold(n_splits=n_folds, shuffle=True, random_state=seed)
+        for train_index, valid_index in kf.split(all_df_encoded):
+            # Create splits
+            train_df, valid_df = all_df_encoded.iloc[train_index], all_df_encoded.iloc[valid_index]
+            # Calculate out-of-fold means and map them to the validation data
+            out_of_fold_means = valid_df[column].map(train_df.groupby(column)[target].mean())
+            all_df_encoded.loc[valid_index, f'{column}_target_enc'] = out_of_fold_means
+
+        # Fill NaNs with global mean
+        all_df_encoded[f'{column}_target_enc'].fillna(all_df_encoded[target].mean(), inplace=True)
+    return all_df_encoded
