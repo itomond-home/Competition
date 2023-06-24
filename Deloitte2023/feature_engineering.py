@@ -504,17 +504,34 @@ def add_new_score_features(df):
 
     return df
 
-def add_grouped_statistics(df):
+def add_grouped_statistics(df_train, df_test):
     columns_to_group = ['temperature', 'discomfort_index', 'humidity', 'home_team_score', 'away_team_score', 'capacity', 'home_team_rank', 'away_team_rank']
+    statistics = ['max', 'min', 'var', 'mean', 'sum']
 
-    statistics = ['max', 'min', 'var', 'mean', 'sum', 'std']
+    # Create a copy of the original dataframes
+    new_df_train = df_train.copy()
+    new_df_test = df_test.copy()
 
     for col in columns_to_group:
         for stat in statistics:
-            df_grouped = df.groupby('venue')[col].agg(stat).reset_index().rename(columns={col: f'{col}_{stat}_by_venue'})
-            df = pd.merge(df, df_grouped, on='venue', how='left')
+            # Compute the statistic on the df_train
+            df_grouped_train = df_train.groupby(['venue'])[col].agg(stat).reset_index().rename(columns={col: f'{col}_{stat}_by_venue'})
+            new_df_train = pd.merge(new_df_train, df_grouped_train, on='venue', how='left')
 
-    return df.fillna(-1)
+            # Compute the statistic on the df_test using only rows with 'id' less than current 'id'
+            def custom_stat(x):
+                return x[:x.name][col].agg(stat)
+            df_grouped_test = df_test.groupby(['venue']).expanding().apply(custom_stat).reset_index()
+            df_grouped_test.columns = ['venue', 'original_index', f'{col}_{stat}_by_venue']
+
+            new_df_test = pd.merge(new_df_test, df_grouped_test, left_index=True, right_on='original_index', how='left').drop(columns='original_index')
+
+    # Combine the two dataframes into one
+    new_all_df = pd.concat([new_df_train, new_df_test], axis=0).reset_index(drop=True)
+
+    return new_all_df.fillna(-1)
+
+
 
 def HDBSCAN_featuring(df):
     selected_features = ['temperature', 'discomfort_index', 'humidity', 'home_team_score', 'away_team_score', 'capacity', 'home_team_rank', 'away_team_rank']
