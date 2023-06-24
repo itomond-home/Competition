@@ -1,11 +1,29 @@
 import re
+import geocoder
+import requests
+import urllib
 import pandas as pd
 import numpy as np
+from tqdm import tqdm
 import hdbscan
 from sklearn.neighbors import NearestNeighbors
 from sklearn.model_selection import KFold
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.preprocessing import StandardScaler
+from math import radians, sin, cos, sqrt, asin
+
+def haversine(lat1, lon1, lat2, lon2):
+    R = 6371.0  # radius of Earth in kilometers
+    lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
+
+    dlon = lon2 - lon1
+    dlat = lat2 - lat1
+
+    a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+    c = 2 * asin(sqrt(a))
+
+    return R * c
+
 
 def process_periodic_features(df):
     df['match_date'] = pd.to_datetime(df['match_date'])
@@ -145,7 +163,7 @@ def extract_prefecture(address):
     match = re.match(r"([^市区町村]+?[都道府県])", address)
     return match.group(1) if match else None
 
-def add_geographical_features(df, venue_info_df):
+def add_geographical_features(df, venue_info_df, home_stadium_df):
     # 都道府県名とその都道府県が所属する地方のマッピングを作成します。
     pref_to_region = {
         '北海道': '北海道',
@@ -161,7 +179,6 @@ def add_geographical_features(df, venue_info_df):
     team_prefecture = {
         '浦和': '埼玉県', '清水': '静岡県','大分': '大分県','福岡': '福岡県','C大阪': '大阪府','千葉': '千葉県','新潟': '新潟県','鹿島': '茨城県','京都': '京都','大宮': '埼玉県','川崎F': '神奈川県','横浜FM': '神奈川県','甲府': '山梨県','FC東京': '東京都','磐田': '静岡県','名古屋': '愛知県','広島': '広島県','G大阪': '大阪府','神戸': '兵庫県','横浜FC': '神奈川県','柏': '千葉県','札幌': '北海道','東京V': '東京都','山形': '山形県','仙台': '宮城県','湘南': '神奈川県','鳥栖': '佐賀県','徳島': '徳島県','松本': '長野県','長崎': '長崎県'
     }
-
 
     # スタジアムがどの都道府県に位置しているかを把握し、それを基に地方を定義します。
     venue_info_df['prefecture'] = venue_info_df['address'].apply(extract_prefecture)
@@ -189,6 +206,49 @@ def add_geographical_features(df, venue_info_df):
     df['distance_category'] = df.apply(lambda row: get_distance_category(row['home_region'], row['away_region']), axis=1)
 
     df = df.drop(['home_prefecture', 'home_region', 'away_region'], axis=1)
+
+
+    makeUrl = "https://msearch.gsi.go.jp/address-search/AddressSearch?q="
+
+    df["home_team_lon"] = np.nan
+    df["home_team_lat"] = np.nan
+    df["away_team_lon"] = np.nan
+    df["away_team_lat"] = np.nan
+
+    for _, rows in tqdm(home_stadium_df.iterrows()):
+        team = rows[0]
+        stadium = rows[1]
+        address = rows[2]
+
+        # 位置情報
+        try:
+            location = geocoder.osm(stadium, timeout=5.0)
+            lat = location.latlng[0]
+            lon = location.latlng[1]
+        except:
+            #team_city = re.sub(r"[^a-zA-Z]", "", team)
+            #location =  geocoder.osm(team_city, timeout=5.0)
+            s_quote = urllib.parse.quote(address)
+            response = requests.get(makeUrl + s_quote)
+            lat = response.json()[0]["geometry"]["coordinates"][1]
+            lon = response.json()[0]["geometry"]["coordinates"][0]
+
+        df.loc[df.home_team==team, "home_team_lon"] = lon
+        df.loc[df.home_team==team, "home_team_lat"] = lat
+
+        df.loc[df.away_team==team, "away_team_lon"] = lon
+        df.loc[df.away_team==team, "away_team_lat"] = lat
+
+    # Calculate distance between home and away team
+    df['distance'] = df.apply(
+        lambda row: haversine(
+            row['home_team_lat'],
+            row['home_team_lon'],
+            row['away_team_lat'],
+            row['away_team_lon']
+        ),
+        axis=1
+    )
 
     return df
 
@@ -415,17 +475,46 @@ def generate_team_performance(df):
 
     return df
 
+def add_new_score_features(df):
+    df = df.copy()
+
+    # Calculating features for all teams
+    teams = np.concatenate((df['home_team'].unique(), df['away_team'].unique()))
+
+    for team in teams:
+        # Calculating averages and standard deviations for the required time periods
+        for n in [1, 2, 4]:
+            df.loc[df['home_team'] == team, f'home_last_{n}_match_avg_points'] = df[df['home_team'] == team]['date'].apply(lambda date: calculate_last_n_matches_avg_values(team, date, n, 'points', df))
+            df.loc[df['away_team'] == team, f'away_last_{n}_match_avg_points'] = df[df['away_team'] == team]['date'].apply(lambda date: calculate_last_n_matches_avg_values(team, date, n, 'points', df))
+
+            df.loc[df['home_team'] == team, f'home_last_{n}_match_avg_scored'] = df[df['home_team'] == team]['date'].apply(lambda date: calculate_last_n_matches_avg_values(team, date, n, 'scored', df))
+            df.loc[df['away_team'] == team, f'away_last_{n}_match_avg_scored'] = df[df['away_team'] == team]['date'].apply(lambda date: calculate_last_n_matches_avg_values(team, date, n, 'scored', df))
+
+            df.loc[df['home_team'] == team, f'home_last_{n}_match_avg_conceded'] = df[df['home_team'] == team]['date'].apply(lambda date: calculate_last_n_matches_avg_values(team, date, n, 'conceded', df))
+            df.loc[df['away_team'] == team, f'away_last_{n}_match_avg_conceded'] = df[df['away_team'] == team]['date'].apply(lambda date: calculate_last_n_matches_avg_values(team, date, n, 'conceded', df))
+
+        # Calculating standard deviations
+        for col in ['scored', 'conceded', 'points']:
+            df.loc[df['home_team'] == team, f'home_{col}_std'] = df[df['home_team'] == team]['date'].apply(lambda date: calculate_std(team, date, col, df))
+            df.loc[df['away_team'] == team, f'away_{col}_std'] = df[df['away_team'] == team]['date'].apply(lambda date: calculate_std(team, date, col, df))
+
+        # Calculating previous match result
+        df.loc[df['home_team'] == team, 'home_prev_match_result'] = df[df['home_team'] == team]['date'].apply(lambda date: calculate_previous_match_result(team, date, df))
+        df.loc[df['away_team'] == team, 'away_prev_match_result'] = df[df['away_team'] == team]['date'].apply(lambda date: calculate_previous_match_result(team, date, df))
+
+    return df
+
 def add_grouped_statistics(df):
     columns_to_group = ['temperature', 'discomfort_index', 'humidity', 'home_team_score', 'away_team_score', 'capacity', 'home_team_rank', 'away_team_rank']
 
-    statistics = ['max', 'min', 'var', 'mean', 'sum']
+    statistics = ['max', 'min', 'var', 'mean', 'sum', 'std']
 
     for col in columns_to_group:
         for stat in statistics:
             df_grouped = df.groupby('venue')[col].agg(stat).reset_index().rename(columns={col: f'{col}_{stat}_by_venue'})
             df = pd.merge(df, df_grouped, on='venue', how='left')
 
-    return df
+    return df.fillna(-1)
 
 def HDBSCAN_featuring(df):
     selected_features = ['temperature', 'discomfort_index', 'humidity', 'home_team_score', 'away_team_score', 'capacity', 'home_team_rank', 'away_team_rank']
