@@ -504,7 +504,10 @@ def add_new_score_features(df):
 
     return df
 
-def add_grouped_statistics(df_train, df_test):
+def add_grouped_statistics(df):
+    df_train = df[df['attendance'] != -1]
+    df_test = df[df['attendance'] == -1]
+
     columns_to_group = ['temperature', 'discomfort_index', 'humidity', 'home_team_score', 'away_team_score', 'capacity', 'home_team_rank', 'away_team_rank']
     statistics = ['max', 'min', 'var', 'mean', 'sum']
 
