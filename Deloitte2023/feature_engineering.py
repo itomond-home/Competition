@@ -509,25 +509,34 @@ def add_grouped_statistics(df):
     df_test = df[df['attendance'] == -1]
 
     columns_to_group = ['temperature', 'discomfort_index', 'humidity', 'home_team_score', 'away_team_score', 'capacity', 'home_team_rank', 'away_team_rank']
+    columns_to_group.append('venue')  # groupbyするためにvenueも含める
     statistics = ['max', 'min', 'var', 'mean', 'sum']
 
     # Create a copy of the original dataframes
     new_df_train = df_train.copy()
     new_df_test = df_test.copy()
 
+    # Create new dataframes containing only the columns to group
+    df_train_grouped = df_train[columns_to_group].copy()
+    df_test_grouped = df_test[columns_to_group].copy()
+
     for col in columns_to_group:
-        for stat in statistics:
-            # Compute the statistic on the df_train
-            df_grouped_train = df_train.groupby(['venue'])[col].agg(stat).reset_index().rename(columns={col: f'{col}_{stat}_by_venue'})
-            new_df_train = pd.merge(new_df_train, df_grouped_train, on='venue', how='left')
+        if col != 'venue':  # venueは統計量を計算する必要がない
+            for stat in statistics:
+                # Compute the statistic on the df_train_grouped
+                df_grouped_train = df_train_grouped.groupby(['venue'])[col].agg(stat).reset_index().rename(columns={col: f'{col}_{stat}_by_venue'})
+                new_df_train = pd.merge(new_df_train, df_grouped_train, on='venue', how='left')
 
-            # Compute the statistic on the df_test using only rows with 'id' less than current 'id'
-            def custom_stat(x):
-                return x[:x.name][col].agg(stat)
-            df_grouped_test = df_test.groupby(['venue']).expanding().apply(custom_stat).reset_index()
-            df_grouped_test.columns = ['venue', 'original_index', f'{col}_{stat}_by_venue']
+                # Compute the statistic on the df_test_grouped using only rows with 'id' less than current 'id'
+                def custom_stat(x):
+                    return x[:x.name].agg(stat)
+                df_grouped_test = df_test_grouped.groupby(['venue'])[col].expanding().apply(custom_stat).reset_index()
 
-            new_df_test = pd.merge(new_df_test, df_grouped_test, left_index=True, right_on='original_index', how='left').drop(columns='original_index')
+                df_grouped_test.columns = ['venue', 'original_index', f'{col}_{stat}_by_venue']
+                # Drop the 'venue' column from df_grouped_test before the merge
+                df_grouped_test = df_grouped_test.drop(columns=['venue'])
+
+                new_df_test = pd.merge(new_df_test, df_grouped_test, left_index=True, right_on='original_index', how='left').drop(columns='original_index')
 
     # Combine the two dataframes into one
     new_all_df = pd.concat([new_df_train, new_df_test], axis=0).reset_index(drop=True)

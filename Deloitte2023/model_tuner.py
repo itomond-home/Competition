@@ -38,16 +38,16 @@ def objective(trial, x_train, y_train, model_type, fixed_params):
         return np.mean(rmses)
 
     elif model_type == 'lgb':
-        categorical_cols = x_train.select_dtypes(include=['object']).columns.tolist()
+        categorical_cols = x_train.select_dtypes(include=['object','category']).columns.tolist()
         params = {
+            'lambda_l1'         : trial.suggest_loguniform('lambda_l1', 1e-8, 10.0),
+            'lambda_l2'         : trial.suggest_loguniform('lambda_l2', 1e-8, 10.0),
+            'num_leaves'        : trial.suggest_int('num_leaves', 2, 512),
+            'feature_fraction'  : trial.suggest_uniform('feature_fraction', 0.4, 1.0),
+            'bagging_fraction'  : trial.suggest_uniform('bagging_fraction', 0.4, 1.0),
+            'bagging_freq'      : trial.suggest_int('bagging_freq', 0, 10),
+            'min_child_samples' : trial.suggest_int('min_child_samples', 5, 100),
             'learning_rate': trial.suggest_loguniform("learning_rate", 1e-2, 1.0),
-            'num_leaves': trial.suggest_int('num_leaves', 2, 256),
-            'max_depth': trial.suggest_int('max_depth', 4, 10),
-            'min_child_samples': trial.suggest_int('min_child_samples', 5, 100),
-            'subsample': trial.suggest_uniform('subsample', 0.1, 1.0),
-            'colsample_bytree': trial.suggest_uniform('colsample_bytree', 0.1, 1.0),
-            'reg_alpha': trial.suggest_loguniform('reg_alpha', 1e-8, 10.0),
-            'reg_lambda': trial.suggest_loguniform('reg_lambda', 1e-8, 10.0)
         }
 
         params = {**fixed_params, **params}  # 事前に設定したパラメータと最適化したパラメータを組み合わせる
@@ -55,15 +55,19 @@ def objective(trial, x_train, y_train, model_type, fixed_params):
         kf = KFold(n_splits=10, shuffle=True, random_state=fixed_params['seed'])
         rmses = []
         for train_index, valid_index in kf.split(x_train):
+            x_train_fold, y_train_fold = x_train.iloc[train_index], y_train.iloc[train_index]
+            x_valid_fold, y_valid_fold = x_train.iloc[valid_index], y_train.iloc[valid_index]
             # Convert categorical columns to 'category' dtype
             for col in categorical_cols:
-                x_train.iloc[train_index][col] = x_train.iloc[train_index][col].astype('category')
-                x_train.iloc[valid_index][col] = x_train.iloc[valid_index][col].astype('category')
-            train_data = lgb.Dataset(x_train.iloc[train_index], label=y_train.iloc[train_index], categorical_feature=categorical_cols, free_raw_data=False)
-            valid_data = lgb.Dataset(x_train.iloc[valid_index], label=y_train.iloc[valid_index], categorical_feature=categorical_cols, free_raw_data=False)
+                x_train_fold[col] = x_train_fold[col].astype('category')
+                x_valid_fold[col] = x_valid_fold[col].astype('category')
+
+            # Create LightGBM datasets
+            train_data = lgb.Dataset(x_train_fold, label=y_train_fold, categorical_feature=categorical_cols)
+            valid_data = lgb.Dataset(x_valid_fold, label=y_valid_fold, categorical_feature=categorical_cols)
             model = lgb.train(params, train_data, valid_sets=[valid_data], callbacks=[lgb.early_stopping(early_stopping_round, verbose=True), lgb.log_evaluation(False)])
-            preds = model.predict(x_train.iloc[valid_index])
-            rmse = np.sqrt(mean_squared_error(y_train.iloc[valid_index], preds))
+            preds = model.predict(x_valid_fold)
+            rmse = np.sqrt(mean_squared_error(y_valid_fold, preds))
             rmses.append(rmse)
         return np.mean(rmses)
     else:
