@@ -8,6 +8,8 @@ from sklearn.metrics import mean_squared_error
 from catboost import CatBoostRegressor
 from sklearn.feature_selection import VarianceThreshold
 from statsmodels.stats.outliers_influence import variance_inflation_factor
+from tqdm import tqdm
+from lightgbm import LGBMRegressor
 
 def objective(trial, x_train, y_train, model_type, fixed_params):
     early_stopping_round = 500
@@ -20,7 +22,8 @@ def objective(trial, x_train, y_train, model_type, fixed_params):
             'random_strength': trial.suggest_int("random_strength", 0, 100),
             'bagging_temperature': trial.suggest_loguniform("bagging_temperature", 0.01, 100.00),
             'od_type': trial.suggest_categorical("od_type", ['IncToDec', 'Iter']),
-            'od_wait': trial.suggest_int("od_wait", 10, 50)
+            'od_wait': trial.suggest_int("od_wait", 10, 50),
+            'l2_leaf_reg': trial.suggest_loguniform('l2_leaf_reg', 1e-2, 10.0)  # L2正則化パラメータを追加
         }
 
         params = {**fixed_params, **params}  # 事前に設定したパラメータと最適化したパラメータを組み合わせる
@@ -38,9 +41,9 @@ def objective(trial, x_train, y_train, model_type, fixed_params):
     elif model_type == 'lgb':
         categorical_cols = x_train.select_dtypes(include=['object','category']).columns.tolist()
         params = {
-            'lambda_l1'         : trial.suggest_loguniform('lambda_l1', 1e-8, 10.0),
-            'lambda_l2'         : trial.suggest_loguniform('lambda_l2', 1e-8, 10.0),
-            'num_leaves'        : trial.suggest_int('num_leaves', 2, 512),
+            'lambda_l1'         : trial.suggest_loguniform('lambda_l1', 1e-2, 10.0),
+            'lambda_l2'         : trial.suggest_loguniform('lambda_l2', 1e-2, 10.0),
+            'num_leaves'        : trial.suggest_int('num_leaves', 2, 256),
             'feature_fraction'  : trial.suggest_uniform('feature_fraction', 0.4, 1.0),
             'bagging_fraction'  : trial.suggest_uniform('bagging_fraction', 0.4, 1.0),
             'bagging_freq'      : trial.suggest_int('bagging_freq', 0, 10),
@@ -189,3 +192,34 @@ def select_features(df):
     df = pd.concat([df, df_numeric], axis=1)
 
     return df
+
+class FRUFS:
+    def __init__(self, df, method="lgb"):
+        self.df = df
+        self.method = method
+        self.model_func = LGBMRegressor
+        self.W = np.zeros((df.shape[1], df.shape[1]))  # 重み/重要度のマトリクス
+
+    # 他の特徴量を計算するための重み/重要度を計算する
+    def calc_coef(self):
+        X = self.df.values
+        for i in tqdm(range(X.shape[1]), total=X.shape[1], desc="Calculating coefficient/importances"):
+            indices = np.concatenate((np.arange(i).reshape(-1, 1), np.arange(i+1, X.shape[1]).reshape(-1, 1)))
+
+            train_X = np.hstack((X[:, :i], X[:, i+1:]))  # i番目の特徴量を外す
+            train_y = X[:, i]  # i番目の特徴量
+
+            # i番目の特徴量を他の特徴量で表現するための学習
+            model = self.model_func()
+            model.fit(train_X, train_y)
+
+            coef = model.feature_importances_
+            self.W[i, indices] = coef.reshape(-1, 1)
+
+        # 各特徴量が他の特徴量を表すときの重み/重要度の平均を計算
+        self.W_average = self.W.mean(axis=0)  # 列方向に平均を取る = ある特徴量にかけられる重みの平均
+        self.average_coef_df = pd.DataFrame({"columns": self.df.columns.values, "importances": self.W_average})
+
+    # 特徴量の重要度をDataFrameとして取得
+    def get_feature_importance(self):
+        return self.average_coef_df.sort_values(by="importances", ascending=False)

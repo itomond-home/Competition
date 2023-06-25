@@ -574,10 +574,6 @@ def compute_knn_features_and_preprocess(train_df, test_df, target_col, k=3, fold
     enc = OneHotEncoder(handle_unknown='ignore')
     all_X = pd.DataFrame(enc.fit_transform(all_df.drop(columns=[target_col])).toarray())
 
-    # Scale features
-    scaler = StandardScaler()
-    all_X = pd.DataFrame(scaler.fit_transform(all_X), index=all_X.index)
-
     train_X = all_X.loc[train_index]
     test_X = all_X.loc[test_index]
 
@@ -624,3 +620,26 @@ def perform_target_encoding(columns, all_df, target, n_folds=5, seed=42):
         # Fill NaNs with global mean
         all_df_encoded[f'{column}_target_enc'].fillna(all_df_encoded[target].mean(), inplace=True)
     return all_df_encoded
+
+def standardize_features(all_df, target_col, id_col):
+    scaler = StandardScaler()
+
+    # Separate the data into training and testing sets
+    train_df = all_df[all_df[target_col] != -1]
+    test_df = all_df[all_df[target_col] == -1]
+
+    # Identify the numeric columns (excluding the target and id columns)
+    numeric_cols = train_df.select_dtypes(include=['int64', 'float64']).columns.tolist()
+    numeric_cols.remove(target_col)
+    numeric_cols.remove(id_col)
+
+    # Fit the scaler to the training data and transform both the training and testing data
+    train_df_scaled = train_df.copy()
+    test_df_scaled = test_df.copy()
+    train_df_scaled[numeric_cols] = scaler.fit_transform(train_df[numeric_cols])
+    test_df_scaled[numeric_cols] = scaler.transform(test_df[numeric_cols])
+
+    # Combine the scaled training and testing data
+    all_df_scaled = pd.concat([train_df_scaled, test_df_scaled], axis=0)
+
+    return all_df_scaled
