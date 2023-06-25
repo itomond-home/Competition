@@ -2,14 +2,12 @@
 import numpy as np
 import pandas as pd
 import optuna
-import optuna.integration.lightgbm as lgbm
 import lightgbm as lgb
 from sklearn.model_selection import KFold
 from sklearn.metrics import mean_squared_error
 from catboost import CatBoostRegressor
-from sklearn.feature_selection import RFECV
-
-
+from sklearn.feature_selection import VarianceThreshold
+from statsmodels.stats.outliers_influence import variance_inflation_factor
 
 def objective(trial, x_train, y_train, model_type, fixed_params):
     early_stopping_round = 500
@@ -149,3 +147,45 @@ def select_features_with_lightgbm(all_df, target_col, seed):
     test_df_selected = test_df[selected_features.to_list() + ['id']]
 
     return train_df_selected, test_df_selected
+
+
+def calculate_vif_(X, thresh=10.0):
+    # Calculating VIF
+    variables = list(range(X.shape[1]))
+    dropped = True
+    while dropped:
+        dropped = False
+        vif = [variance_inflation_factor(X.iloc[:, variables].values, ix) for ix in range(X.iloc[:, variables].shape[1])]
+
+        maxloc = vif.index(max(vif))
+        if max(vif) > thresh:
+            print('dropping \'' + X.iloc[:, variables].columns[maxloc] + '\' at index: ' + str(maxloc))
+            del variables[maxloc]
+            dropped = True
+
+    print('Remaining variables:')
+    print(X.columns[variables])
+    return X.iloc[:, variables]
+
+def select_features(df):
+    not_features = ['id', 'attendance']  # Columns that should not be considered as features
+    numeric_cols = df.drop(not_features, axis=1).select_dtypes(include=['int64', 'float64']).columns
+
+    # Removing features with no variance
+    selector = VarianceThreshold()
+    df_numeric = df[numeric_cols].copy()
+    selector.fit_transform(df_numeric)
+
+    constant_columns = [column for column in df_numeric.columns
+                        if column not in df_numeric.columns[selector.get_support()]]
+
+    df.drop(constant_columns, axis=1, inplace=True)
+
+    # Removing multicollinear features
+    df_numeric = calculate_vif_(df_numeric)
+
+    # Replace the original numeric columns with the selected numeric columns
+    df.drop(numeric_cols, axis=1, inplace=True)
+    df = pd.concat([df, df_numeric], axis=1)
+
+    return df
