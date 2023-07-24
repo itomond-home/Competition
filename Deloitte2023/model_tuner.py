@@ -18,12 +18,12 @@ def objective(trial, x_train, y_train, model_type, fixed_params):
         cat_features = [x_train.columns.get_loc(col) for col in categorical_cols]
         params = {
             'depth': trial.suggest_int("depth", 4, 10),
-            'learning_rate': trial.suggest_loguniform("learning_rate", 1e-2, 1.0),
+            'learning_rate': trial.suggest_uniform("learning_rate", 1e-2, 1.0),
             'random_strength': trial.suggest_int("random_strength", 0, 100),
-            'bagging_temperature': trial.suggest_loguniform("bagging_temperature", 0.01, 100.00),
+            'bagging_temperature': trial.suggest_uniform("bagging_temperature", 0.01, 100.00),
             'od_type': trial.suggest_categorical("od_type", ['IncToDec', 'Iter']),
             'od_wait': trial.suggest_int("od_wait", 10, 50),
-            'l2_leaf_reg': trial.suggest_loguniform('l2_leaf_reg', 1e-2, 10.0)  # L2正則化パラメータを追加
+            'l2_leaf_reg': trial.suggest_uniform('l2_leaf_reg', 1e-2, 10.0)  # L2正則化パラメータを追加
         }
 
         params = {**fixed_params, **params}  # 事前に設定したパラメータと最適化したパラメータを組み合わせる
@@ -41,14 +41,14 @@ def objective(trial, x_train, y_train, model_type, fixed_params):
     elif model_type == 'lgb':
         categorical_cols = x_train.select_dtypes(include=['object','category']).columns.tolist()
         params = {
-            'lambda_l1'         : trial.suggest_loguniform('lambda_l1', 1e-2, 10.0),
-            'lambda_l2'         : trial.suggest_loguniform('lambda_l2', 1e-2, 10.0),
+            'lambda_l1'         : trial.suggest_uniform('lambda_l1', 0, 10.0),
+            'lambda_l2'         : trial.suggest_uniform('lambda_l2', 0, 10.0),
             'num_leaves'        : trial.suggest_int('num_leaves', 2, 256),
             'feature_fraction'  : trial.suggest_uniform('feature_fraction', 0.4, 1.0),
             'bagging_fraction'  : trial.suggest_uniform('bagging_fraction', 0.4, 1.0),
             'bagging_freq'      : trial.suggest_int('bagging_freq', 0, 10),
-            'min_child_samples' : trial.suggest_int('min_child_samples', 5, 100),
-            'learning_rate': trial.suggest_loguniform("learning_rate", 1e-2, 1.0),
+            'min_data_in_leaf'  : trial.suggest_int('bagging_freq', 20, 50),
+            'learning_rate'     : trial.suggest_uniform("learning_rate", 1e-2, 0.3),
         }
 
         params = {**fixed_params, **params}  # 事前に設定したパラメータと最適化したパラメータを組み合わせる

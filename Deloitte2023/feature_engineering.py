@@ -543,20 +543,28 @@ def add_grouped_statistics(df):
 
     return new_all_df.fillna(-1)
 
+from sklearn.neighbors import NearestNeighbors
 
-
-def HDBSCAN_featuring(df):
+def HDBSCAN_featuring(train_df, test_df):
     selected_features = ['temperature', 'discomfort_index', 'humidity', 'home_team_score', 'away_team_score', 'capacity', 'home_team_rank', 'away_team_rank']
     non_binary_features = selected_features.copy()
 
     # HDBSCAN-based features
-    df_copy = df[non_binary_features].copy()
-    df_copy.reset_index(drop=True, inplace=True)
+    train_df_copy = train_df[non_binary_features].copy()
+    test_df_copy = test_df[non_binary_features].copy()
+    train_df_copy.reset_index(drop=True, inplace=True)
 
     clusterer = hdbscan.HDBSCAN(min_cluster_size=5)
-    df['cluster'] = clusterer.fit_predict(df_copy)
+    train_df['cluster'] = clusterer.fit_predict(train_df_copy)
 
-    return df
+    # Fit a NearestNeighbors estimator on the train data
+    knn = NearestNeighbors(n_neighbors=1).fit(train_df_copy)
+
+    # For each test point, find its nearest neighbor in the train data and assign it the corresponding cluster label
+    distances, indices = knn.kneighbors(test_df_copy)
+    test_df['cluster'] = train_df.iloc[indices.flatten()]['cluster'].values
+
+    return pd.concat([train_df, test_df], axis=0)
 
 def compute_knn_features_and_preprocess(train_df, test_df, target_col, k=3, folds=5):
     # Reset the index of train_df and test_df
@@ -581,13 +589,15 @@ def compute_knn_features_and_preprocess(train_df, test_df, target_col, k=3, fold
     kf = KFold(n_splits=folds, shuffle=True, random_state=42)
 
     # Compute KNN features for training data
-    for train_index, _ in kf.split(train_X):
-        X_fold = train_X.iloc[train_index]
+    for train_index, val_index in kf.split(train_X):
+        X_train_fold = train_X.iloc[train_index]
+        X_val_fold = train_X.iloc[val_index]
         for i in range(1, k + 1):
             knn = NearestNeighbors(n_neighbors=i)
-            knn.fit(X_fold)
-            dist, _ = knn.kneighbors(train_X)
-            all_df.loc[train_X.index, f'knn_avg_dist_{i}'] = dist.mean(axis=1)
+            knn.fit(X_train_fold)
+            dist, _ = knn.kneighbors(X_val_fold)
+            all_df.loc[X_val_fold.index, f'knn_avg_dist_{i}'] = dist.mean(axis=1)
+
 
     # Compute KNN features for test data
     for i in range(1, k + 1):
@@ -599,27 +609,38 @@ def compute_knn_features_and_preprocess(train_df, test_df, target_col, k=3, fold
     return all_df
 
 
-def perform_target_encoding(columns, all_df, target, n_folds=5, seed=42):
+def perform_target_encoding(columns, train_df, test_df, target, n_folds=5, seed=42):
     # Create a copy to not modify original data
-    all_df_encoded = all_df.copy()
+    train_df_encoded = train_df.copy()
+    test_df_encoded = test_df.copy()
 
     # Create a new target encoded feature for each feature in columns
     for column in columns:
         # Create a new column initialized with 0
-        all_df_encoded[f'{column}_target_enc'] = 0
+        train_df_encoded[f'{column}_target_enc'] = 0
+        test_df_encoded[f'{column}_target_enc'] = 0
 
-        # Perform out-of-fold target encoding
+        # Perform out-of-fold target encoding for training data
         kf = KFold(n_splits=n_folds, shuffle=True, random_state=seed)
-        for train_index, valid_index in kf.split(all_df_encoded):
+        for train_index, valid_index in kf.split(train_df_encoded):
             # Create splits
-            train_df, valid_df = all_df_encoded.iloc[train_index], all_df_encoded.iloc[valid_index]
+            train_fold_df, valid_fold_df = train_df_encoded.iloc[train_index], train_df_encoded.iloc[valid_index]
             # Calculate out-of-fold means and map them to the validation data
-            out_of_fold_means = valid_df[column].map(train_df.groupby(column)[target].mean())
-            all_df_encoded.loc[valid_index, f'{column}_target_enc'] = out_of_fold_means
+            out_of_fold_means = valid_fold_df[column].map(train_fold_df.groupby(column)[target].mean())
+            train_df_encoded.loc[valid_index, f'{column}_target_enc'] = out_of_fold_means
 
-        # Fill NaNs with global mean
-        all_df_encoded[f'{column}_target_enc'].fillna(all_df_encoded[target].mean(), inplace=True)
-    return all_df_encoded
+        # Fill NaNs in the training data with global mean of the training data
+        train_df_encoded[f'{column}_target_enc'].fillna(train_df_encoded[target].mean(), inplace=True)
+
+        # Target encode test data using means from the training data
+        test_means = test_df_encoded[column].map(train_df_encoded.groupby(column)[target].mean())
+        test_df_encoded[f'{column}_target_enc'] = test_means
+
+        # Fill NaNs in the test data with global mean of the training data
+        test_df_encoded[f'{column}_target_enc'].fillna(train_df_encoded[target].mean(), inplace=True)
+
+    return train_df_encoded, test_df_encoded
+
 
 def standardize_features(all_df, target_col, id_col):
     scaler = StandardScaler()
