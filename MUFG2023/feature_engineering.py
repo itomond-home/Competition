@@ -155,7 +155,7 @@ def apply_feature_engineering(train, test, card, user):
 
 # 緯度経度をGoogleMapから算出するコード
 # from googlemaps import Client as GoogleMaps
-# gmaps = GoogleMaps('AIzaSyBs7EE0EdrzF3Sx8H3acwN3_n0XmYVNB4A')
+# gmaps = GoogleMaps('XXXXXX')
 # lat_lng_cache = {}
 # def get_lat_lng(zip_code):
 #     # キャッシュ内に結果があるか確認
