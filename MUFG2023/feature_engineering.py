@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 from geopy.distance import geodesic
+from sklearn.cluster import KMeans
 import json
 from datetime import datetime
 
@@ -137,9 +138,34 @@ def make_date_feature(df):
 def binning_score(df):
     # FICOスコアに基づいて新しい列を作成
     bins = [300, 579, 669, 739, 799, 850]
-    labels = ['Very Poor', 'Fair', 'Good', 'Very Good', 'Exceptional']
-    df['fico_category'] = pd.cut(df['fico_score'], bins=bins, labels=labels, right=True)
+    labels = [1, 2, 3, 4, 5]
+    df['fico_label'] = pd.cut(df['fico_score'], bins=bins, labels=labels, right=True)
+    # fico_label列を整数型に変換
+    df['fico_label'] = df['fico_label'].astype('int')
     return df
+
+
+def clastering_geometry(df):
+    # NaN（ONLINE）を除去してクラスタリング
+    df_not_online = df[df['shop_lng'].notna()]
+    kmeans = KMeans(n_clusters=3)
+    df_not_online['cluster_id'] = kmeans.fit_predict(df_not_online[['shop_lng', 'shop_lat']])
+
+    # 元のDataFrameにクラスタIDをマージ
+    df = pd.merge(df, df_not_online[['index', 'cluster_id']], on='index', how='left')
+
+    # ONLINEに対するクラスタIDを設定
+    df['cluster_id'].fillna(-1, inplace=True)
+    return df
+
+def one_hot_encode_object_columns(df):
+    # DataFrameのobject型の列名を取得
+    object_columns = df.select_dtypes(include=['object']).columns
+
+    # ワンホットエンコーディングを適用
+    df_one_hot = pd.get_dummies(df, columns=object_columns, drop_first=True)
+
+    return df_one_hot
 
 def apply_feature_engineering(train, test, card, user):
     df = make_unique_id(train, test, card, user)
@@ -150,7 +176,59 @@ def apply_feature_engineering(train, test, card, user):
     df = calculate_statistics(df)
     df = make_date_feature(df)
     df = binning_score(df)
+    df = df.drop(['zip','merchant_state','unique_id','expires','acct_open_date','acct_open','user_id','address','city','state','expires_date','merchant_city'],axis=1)
+    df = one_hot_encode_object_columns(df)
+    df = clastering_geometry(df)
+    df = df.drop(['shop_lng', 'shop_lat'],axis=1)
     return df
+
+from sklearn.model_selection import GridSearchCV, StratifiedKFold
+from imblearn.pipeline import Pipeline
+from imblearn.over_sampling import SMOTE
+from sklearn.ensemble import RandomForestClassifier
+
+def smote_optimize_and_apply(train_df, target_column, random_state):
+    # ターゲットと特徴量を分割
+    X = train_df.drop(target_column, axis=1)
+    y = train_df[target_column]
+
+    # パイプライン設定
+    pipeline = Pipeline([
+        ('smote', SMOTE()),
+        ('classifier', RandomForestClassifier())
+    ])
+
+    # ハイパーパラメータの設定範囲
+    param_grid = {
+        'smote__k_neighbors': [3, 5, 7],
+        'smote__sampling_strategy': ['auto', 0.5, 0.7],
+    }
+
+    # StratifiedKFoldのインスタンスを作成
+    stratified_kfold = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+
+    # グリッドサーチ
+    grid_search = GridSearchCV(pipeline, param_grid=param_grid, cv=stratified_kfold, scoring='f1_macro')
+    grid_search.fit(X, y)
+
+    # 最適なパラメータでSMOTEを適用
+    best_params = grid_search.best_params_
+    smote = SMOTE(
+        k_neighbors=best_params['smote__k_neighbors'],
+        sampling_strategy=best_params['smote__sampling_strategy'],
+        random_state=random_state
+    )
+
+    X_resampled, y_resampled = smote.fit_resample(X, y)
+
+    # SMOTE適用後のデータフレームを生成
+    train_df_SMOTE = pd.DataFrame(X_resampled, columns=X.columns)
+    train_df_SMOTE[target_column] = y_resampled
+    return train_df_SMOTE
+
+# 使用例（target_columnは目的変数の列名）
+# train_df_SMOTE, best_params = smote_optimize_and_apply(train_df, 'target_column')
+
 
 
 # 緯度経度をGoogleMapから算出するコード
